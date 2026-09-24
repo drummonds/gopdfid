@@ -1,0 +1,51 @@
+# https://taskfile.dev
+
+version: '3'
+
+tasks:
+  fmt:
+    desc: Format Go source code
+    cmds:
+      - go fmt ./...
+
+  vet:
+    desc: Run Go vet
+    cmds:
+      - go vet ./...
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test ./...
+
+  check:
+    desc: Run fmt, vet, and test
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: test
+
+  deps:tidy:
+    desc: Tidy module dependencies
+    cmds:
+      - go mod tidy
+
+  run:
+    desc: Scan PDFs given as CLI_ARGS (task run -- file.pdf)
+    cmds:
+      - go run ./cmd/gopdfid {{.CLI_ARGS}}
+
+  install:
+    desc: Install the gopdfid binary
+    cmds:
+      - go install ./cmd/gopdfid
+
+  docs:build:
+    desc: Build documentation (markdown to HTML)
+    cmds:
+      - task-plus md2html --file index.md --dst docs
+
+  clean:
+    desc: Remove generated files
+    cmds:
+      - rm -rf docs/*.html dist
