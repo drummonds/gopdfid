@@ -4,12 +4,19 @@
 // that malformed files (the norm for malicious PDFs) are still examined.
 //
 // Names are decoded before matching, so the hex-escaped /J#53 counts as /JS.
+// Flate-compressed streams are inflated and scanned as well, so names hidden
+// in object streams (PDF 1.5+) are counted separately in StreamCounts.
 package gopdfid
 
 import (
 	"bytes"
+	"compress/zlib"
 	"io"
 )
+
+// maxInflated caps the bytes taken from any one stream, so a decompression
+// bomb cannot exhaust memory.
+const maxInflated = 32 << 20
 
 // Keywords is every name and structural token counted, in report order.
 var Keywords = []string{
@@ -32,8 +39,12 @@ var ActiveKeywords = []string{
 type Report struct {
 	// IsPDF is true when the file starts with a %PDF- header.
 	IsPDF bool
-	// Counts holds the number of occurrences of each keyword in Keywords.
+	// Counts holds the number of occurrences of each keyword in Keywords in
+	// the raw bytes of the file: the numbers pdfid would report.
 	Counts map[string]int
+	// StreamCounts holds occurrences found inside inflated Flate streams,
+	// which is where object streams hide dictionaries from a raw scan.
+	StreamCounts map[string]int
 }
 
 // HasActiveContent reports whether any of ActiveKeywords was seen.
@@ -45,7 +56,7 @@ func (r Report) HasActiveContent() bool {
 func (r Report) ActiveContent() []string {
 	var found []string
 	for _, k := range ActiveKeywords {
-		if r.Counts[k] > 0 {
+		if r.Counts[k]+r.StreamCounts[k] > 0 {
 			found = append(found, k)
 		}
 	}
@@ -64,15 +75,51 @@ func Scan(src io.Reader) (Report, error) {
 // ScanBytes counts keywords in an in-memory file.
 func ScanBytes(data []byte) Report {
 	r := Report{
-		IsPDF:  bytes.HasPrefix(data, []byte("%PDF-")),
-		Counts: make(map[string]int, len(Keywords)),
+		IsPDF:        bytes.HasPrefix(data, []byte("%PDF-")),
+		Counts:       zeroCounts(),
+		StreamCounts: zeroCounts(),
 	}
-	for _, k := range Keywords {
-		r.Counts[k] = 0
+	raw := scanner{data: data, counts: r.Counts, collectStreams: true}
+	raw.run()
+	for _, start := range raw.streams {
+		inflated := inflate(streamBody(data, start))
+		if len(inflated) == 0 {
+			continue
+		}
+		s := scanner{data: inflated, counts: r.StreamCounts}
+		s.run()
 	}
-	s := scanner{data: data, counts: r.Counts}
-	s.run()
 	return r
+}
+
+func zeroCounts() map[string]int {
+	m := make(map[string]int, len(Keywords))
+	for _, k := range Keywords {
+		m[k] = 0
+	}
+	return m
+}
+
+// streamBody returns the bytes from a stream's data start up to its
+// endstream keyword, or to end of file when the keyword is missing.
+func streamBody(data []byte, start int) []byte {
+	end := bytes.Index(data[start:], []byte("endstream"))
+	if end < 0 {
+		return data[start:]
+	}
+	return data[start : start+end]
+}
+
+// inflate decodes zlib data, returning whatever was recovered before any
+// error (a truncated stream still yields its leading bytes) and nil when the
+// data is not zlib at all.
+func inflate(body []byte) []byte {
+	zr, err := zlib.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	out, _ := io.ReadAll(io.LimitReader(zr, maxInflated))
+	return out
 }
 
 var wanted = func() map[string]bool {
@@ -86,6 +133,10 @@ var wanted = func() map[string]bool {
 type scanner struct {
 	data   []byte
 	counts map[string]int
+	// collectStreams records the data start of every stream keyword seen,
+	// for inflation after the pass. Off when scanning inflated data.
+	collectStreams bool
+	streams        []int
 }
 
 // run walks the bytes once. A '/' starts a name, which is decoded and matched
@@ -105,11 +156,26 @@ func (s *scanner) run() {
 			for i < len(s.data) && isRegular(s.data[i]) {
 				i++
 			}
-			s.count(string(s.data[start:i]))
+			token := string(s.data[start:i])
+			s.count(token)
+			if token == "stream" && s.collectStreams {
+				s.streams = append(s.streams, s.afterEOL(i))
+			}
 		default:
 			i++
 		}
 	}
+}
+
+// afterEOL skips the CRLF or LF that follows the stream keyword.
+func (s *scanner) afterEOL(i int) int {
+	if i < len(s.data) && s.data[i] == '\r' {
+		i++
+	}
+	if i < len(s.data) && s.data[i] == '\n' {
+		i++
+	}
+	return i
 }
 
 func (s *scanner) count(token string) {

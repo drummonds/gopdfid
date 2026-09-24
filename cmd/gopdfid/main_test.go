@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"compress/zlib"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -59,5 +61,32 @@ func TestJSONOutput(t *testing.T) {
 	s := out.String()
 	if !strings.Contains(s, `"/AA": 1`) || !strings.Contains(s, `"active_content": [`) {
 		t.Errorf("unexpected JSON:\n%s", s)
+	}
+}
+
+func TestStreamCountsAreReported(t *testing.T) {
+	var z bytes.Buffer
+	w := zlib.NewWriter(&z)
+	_, _ = w.Write([]byte("<< /OpenAction << /S /JavaScript /JS (x) >> >>"))
+	_ = w.Close()
+	p := filepath.Join(t.TempDir(), "objstm.pdf")
+	body := "%PDF-1.5\n5 0 obj\n<< /Type /ObjStm /Filter /FlateDecode /Length " + strconv.Itoa(z.Len()) +
+		" >>\nstream\n" + z.String() + "\nendstream\nendobj\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{p}, &out, &errOut); code != 1 {
+		t.Errorf("exit %d want 1", code)
+	}
+	if !strings.Contains(out.String(), "/JS            0  (1 in streams)") {
+		t.Errorf("stream column missing:\n%s", out.String())
+	}
+
+	out.Reset()
+	run([]string{"-json", p}, &out, &errOut)
+	if !strings.Contains(out.String(), `"stream_counts": {`) {
+		t.Errorf("JSON lacks stream_counts:\n%s", out.String())
 	}
 }

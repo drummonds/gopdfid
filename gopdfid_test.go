@@ -1,6 +1,9 @@
 package gopdfid
 
 import (
+	"bytes"
+	"compress/zlib"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -97,5 +100,57 @@ func TestNotAPDF(t *testing.T) {
 	r = scanString(t, minimalPDF(""))
 	if !r.IsPDF {
 		t.Error("PDF header not recognised")
+	}
+}
+
+// objStmPDF hides a dictionary inside a Flate-compressed object stream, as
+// PDF 1.5+ writers do, so the raw bytes never contain its names.
+func objStmPDF(t *testing.T, hidden string, eol string) string {
+	t.Helper()
+	var z bytes.Buffer
+	w := zlib.NewWriter(&z)
+	if _, err := w.Write([]byte("4 0 " + hidden)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return "%PDF-1.5\n" +
+		"5 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /Length " +
+		strconv.Itoa(z.Len()) + " >>\nstream" + eol + z.String() + eol + "endstream\nendobj\n" +
+		"trailer\n<< /Root 4 0 R >>\n%%EOF\n"
+}
+
+func TestNamesInsideObjectStreamsAreCounted(t *testing.T) {
+	for _, eol := range []string{"\n", "\r\n"} {
+		r := scanString(t, objStmPDF(t, "<< /Type /Catalog /OpenAction << /S /JavaScript /JS (x) >> >>", eol))
+		if r.Counts["/JS"] != 0 {
+			t.Errorf("eol %q: raw count saw inside a compressed stream: %d", eol, r.Counts["/JS"])
+		}
+		if r.StreamCounts["/JS"] != 1 || r.StreamCounts["/OpenAction"] != 1 {
+			t.Errorf("eol %q: stream counts %v", eol, r.StreamCounts)
+		}
+		if !r.HasActiveContent() {
+			t.Errorf("eol %q: active content in object stream not flagged", eol)
+		}
+		if r.Counts["/ObjStm"] != 1 || r.Counts["stream"] != 1 {
+			t.Errorf("eol %q: raw counts %v", eol, r.Counts)
+		}
+	}
+}
+
+func TestUncompressibleStreamIsSkipped(t *testing.T) {
+	pdf := "%PDF-1.4\n1 0 obj\n<< /Length 9 >>\nstream\n/JS junk!\nendstream\nendobj\n"
+	r := scanString(t, pdf)
+	// Not zlib data, so nothing inflates; the raw scan still sees /JS.
+	if r.Counts["/JS"] != 1 || r.StreamCounts["/JS"] != 0 {
+		t.Errorf("raw %v stream %v", r.Counts, r.StreamCounts)
+	}
+}
+
+func TestStreamWithoutEndIsTolerated(t *testing.T) {
+	r := scanString(t, "%PDF-1.4\n1 0 obj\n<< >>\nstream\n")
+	if r.Counts["stream"] != 1 {
+		t.Errorf("truncated stream: %v", r.Counts)
 	}
 }

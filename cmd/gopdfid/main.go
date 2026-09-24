@@ -26,6 +26,7 @@ type fileReport struct {
 	File          string         `json:"file"`
 	IsPDF         bool           `json:"is_pdf"`
 	Counts        map[string]int `json:"counts"`
+	StreamCounts  map[string]int `json:"stream_counts"`
 	ActiveContent []string       `json:"active_content"`
 }
 
@@ -60,6 +61,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			File:          path,
 			IsPDF:         r.IsPDF,
 			Counts:        r.Counts,
+			StreamCounts:  r.StreamCounts,
 			ActiveContent: r.ActiveContent(),
 		}
 		if fr.ActiveContent == nil {
@@ -97,7 +99,11 @@ func formatText(fr fileReport) string {
 		b.WriteString("  (no %PDF- header)\n")
 	}
 	for _, k := range gopdfid.Keywords {
-		fmt.Fprintf(&b, "  %-14s %d\n", k, fr.Counts[k])
+		fmt.Fprintf(&b, "  %-14s %d", k, fr.Counts[k])
+		if n := fr.StreamCounts[k]; n > 0 {
+			fmt.Fprintf(&b, "  (%d in streams)", n)
+		}
+		b.WriteByte('\n')
 	}
 	if len(fr.ActiveContent) == 0 {
 		b.WriteString("  active content: none\n")

@@ -53,15 +53,25 @@ if err == nil && r.HasActiveContent() {
 }
 ```
 
-`Report.Counts` holds every keyword in `gopdfid.Keywords`;
-`gopdfid.ActiveKeywords` lists the ones that trigger the verdict.
+`Report.Counts` (raw) and `Report.StreamCounts` (inside inflated streams)
+hold every keyword in `gopdfid.Keywords`; `gopdfid.ActiveKeywords` lists the
+ones that trigger the verdict.
+
+## Streams
+
+PDF 1.5+ writers pack dictionaries into Flate-compressed object streams, so
+a raw scan can miss an `/OpenAction` entirely. Every stream is inflated
+(capped at 32 MiB each) and scanned again; those hits are reported
+separately as `(N in streams)` in the text output and `stream_counts` in
+JSON, and count towards the verdict. `Report.Counts` stays the raw figure
+pdfid would give.
 
 ## Limits
 
-Only raw bytes are scanned. Names inside compressed object streams
-(`/ObjStm`, PDF 1.5+) are invisible until the stream is inflated; a non-zero
-`/ObjStm` count with otherwise clean results is itself worth noting. Stream
-inflation is on the roadmap.
+Only Flate streams are inflated; a stream under another filter (LZW, ASCII85,
+or a Flate stream with predictors) is scanned only in its compressed form.
+Encrypted files (`/Encrypt` non-zero) keep their strings and streams
+opaque, though names in dictionaries remain visible.
 
 ## Links
 
