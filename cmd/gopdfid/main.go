@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"git.bytestone.uk/hum3/gopdfid"
 )
@@ -33,7 +34,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "print one JSON object per file")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: gopdfid [-json] file.pdf...")
+		_, _ = fmt.Fprintln(stderr, "usage: gopdfid [-json] file.pdf...")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -48,7 +49,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	for _, path := range fs.Args() {
 		r, err := scanFile(path)
 		if err != nil {
-			fmt.Fprintf(stderr, "gopdfid: %v\n", err)
+			warn(stderr, err)
 			code = 2
 			continue
 		}
@@ -64,12 +65,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if fr.ActiveContent == nil {
 			fr.ActiveContent = []string{}
 		}
+		var werr error
 		if *asJSON {
 			enc := json.NewEncoder(stdout)
 			enc.SetIndent("", "  ")
-			enc.Encode(fr)
+			werr = enc.Encode(fr)
 		} else {
-			printText(stdout, fr)
+			_, werr = io.WriteString(stdout, formatText(fr))
+		}
+		if werr != nil {
+			warn(stderr, werr)
+			return 2
 		}
 	}
 	return code
@@ -80,25 +86,28 @@ func scanFile(path string) (gopdfid.Report, error) {
 	if err != nil {
 		return gopdfid.Report{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return gopdfid.Scan(f)
 }
 
-func printText(w io.Writer, fr fileReport) {
-	fmt.Fprintf(w, "%s\n", filepath.Base(fr.File))
+func formatText(fr fileReport) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n", filepath.Base(fr.File))
 	if !fr.IsPDF {
-		fmt.Fprintln(w, "  (no %PDF- header)")
+		b.WriteString("  (no %PDF- header)\n")
 	}
 	for _, k := range gopdfid.Keywords {
-		fmt.Fprintf(w, "  %-14s %d\n", k, fr.Counts[k])
+		fmt.Fprintf(&b, "  %-14s %d\n", k, fr.Counts[k])
 	}
 	if len(fr.ActiveContent) == 0 {
-		fmt.Fprintln(w, "  active content: none")
-		return
+		b.WriteString("  active content: none\n")
+		return b.String()
 	}
-	fmt.Fprint(w, "  active content:")
-	for _, k := range fr.ActiveContent {
-		fmt.Fprint(w, " ", k)
-	}
-	fmt.Fprintln(w)
+	b.WriteString("  active content: " + strings.Join(fr.ActiveContent, " ") + "\n")
+	return b.String()
+}
+
+// warn reports an error on stderr; a failed stderr write has nowhere to go.
+func warn(stderr io.Writer, err error) {
+	_, _ = fmt.Fprintf(stderr, "gopdfid: %v\n", err)
 }

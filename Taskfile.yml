@@ -7,11 +7,17 @@ tasks:
     desc: Format Go source code
     cmds:
       - go fmt ./...
+      - go fix ./...
 
   vet:
     desc: Run Go vet
     cmds:
       - go vet ./...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
 
   test:
     desc: Run tests
@@ -23,6 +29,7 @@ tasks:
     cmds:
       - task: fmt
       - task: vet
+      - task: lint
       - task: test
 
   deps:tidy:
